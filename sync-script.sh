@@ -44,9 +44,9 @@ printf '\n' >> "$RSC_FILE"
 
 # Create function for script creation
 printf ':global createScriptIfMissing do={\n' >> "$RSC_FILE"
-printf '    :if ([/system script print count-only where name=$1] = 0) do={\n' >> "$RSC_FILE"
-printf '        :put ("Creating script: " . $1);\n' >> "$RSC_FILE"
-printf '        /system script add name=$1\n' >> "$RSC_FILE"
+printf '    :if ([/system script print count-only where name=$scriptName] = 0) do={\n' >> "$RSC_FILE"
+printf '        :put ("Creating script: " . $scriptName);\n' >> "$RSC_FILE"
+printf '        /system script add name=$scriptName\n' >> "$RSC_FILE"
 printf '    }\n' >> "$RSC_FILE"
 printf '}\n\n' >> "$RSC_FILE"
 
@@ -65,7 +65,7 @@ for SCRIPT_FILE in scripts/config/*.rsc scripts/check/*.rsc; do
     fi
     
     # Call function with script name
-    printf '$createScriptIfMissing "%s"\n' "$SCRIPT_NAME" >> "$RSC_FILE"
+    printf '$createScriptIfMissing scriptName="%s"\n' "$SCRIPT_NAME" >> "$RSC_FILE"
 done
 
 # Empty line between sections
@@ -101,7 +101,7 @@ for SCRIPT_FILE in scripts/config/*.rsc scripts/check/*.rsc; do
     done < "$SCRIPT_FILE"
     
     # Write set command directly to file
-    printf ':put "Updating script: %s"; /system script set [find where name="%s"] source="' "$SCRIPT_NAME" "$SCRIPT_NAME" >> "$RSC_FILE"
+    printf ':put "Updating script: %s"; /system script set "%s" source="' "$SCRIPT_NAME" "$SCRIPT_NAME" >> "$RSC_FILE"
     echo "$SCRIPT_CONTENT" | sed 's/\\n/\\n\\\n    /g' >> "$RSC_FILE"
     printf '" comment="%s" policy=%s\n\n' "$ESCAPED_COMMENT" "$POLICY" >> "$RSC_FILE"
 done

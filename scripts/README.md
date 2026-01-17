@@ -44,10 +44,12 @@ Scripts should start with a header:
 ### Logging
 
 ```routeros
-:log info "message"    # For actions (add/update/remove)
-:log debug "message"   # For no-ops (already exists, skipping)
+:log info "message"    # For actions: add, update (set), or remove commands
+:log debug "message"   # For no-ops: when you skip doing anything (no command executed)
 :put "message"         # For console output (visible when running script)
 ```
+
+**Important:** Updates (`/set` commands) are **actions** and must use `:log info`, not `:log debug`. Only use `:log debug` when you check for existence and skip executing any command.
 
 Note: `:log` writes to log files and isn't visible when running the script. Use `:put` for output visible in the console.
 
