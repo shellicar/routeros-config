@@ -6,5 +6,8 @@
   ],
   "cSpell.words": [
     "routeros", "mikrotik"
-  ]
+  ],
+  "files.associations": {
+    "*.rsc": "rosScript"
+  }
 }

@@ -51,7 +51,7 @@ printf '    }\n' >> "$RSC_FILE"
 printf '}\n\n' >> "$RSC_FILE"
 
 # Write all add commands first
-for SCRIPT_FILE in scripts/config/*.txt scripts/check/*.txt; do
+for SCRIPT_FILE in scripts/config/*.rsc scripts/check/*.rsc; do
     if [ ! -f "$SCRIPT_FILE" ]; then
         continue
     fi
@@ -75,7 +75,7 @@ printf ':put "=== Updating scripts ==="\n' >> "$RSC_FILE"
 printf '\n' >> "$RSC_FILE"
 
 # Write all set commands
-for SCRIPT_FILE in scripts/config/*.txt scripts/check/*.txt; do
+for SCRIPT_FILE in scripts/config/*.rsc scripts/check/*.rsc; do
     if [ ! -f "$SCRIPT_FILE" ]; then
         continue
     fi
