@@ -33,8 +33,9 @@ These scripts are tested on CRS106, a MikroTik switch/router.
 routeros-config/
 ├── scripts/
 │   ├── config/          # Configuration scripts
-│   └── check/           # Diagnostic scripts
+│   ├── check/           # Diagnostic scripts
+│   └── README.md        # Format and syntax guidelines
 └── README.md            # This file
 ```
 
-For detailed scripting patterns and technical documentation, see `scripts/README.md`.
+For format and syntax guidelines, see [scripts/README.md](scripts/README.md).
