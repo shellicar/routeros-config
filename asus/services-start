@@ -1,0 +1,157 @@
+#!/bin/sh
+#
+# /jffs/scripts/services-start
+#
+# POC: configure eth5 (the 2.5G LAN port) as an 802.1Q trunk carrying VLAN 10
+# and VLAN 50. Each VLAN gets its own bridge, router IP, dnsmasq DHCP scope,
+# and NAT to WAN. Inter-VLAN forwarding is symmetrically denied.
+#
+# Two on-router LAN ports also become untagged access ports for the VLANs,
+# so a laptop plugged directly into the AX86U lands on the right VLAN without
+# going through the external trunk:
+#   - LAN 2 (eth3) → VLAN 10
+#   - LAN 1 (eth4) → VLAN 50
+# LAN 3 (eth2) and LAN 4 (eth1) stay in br0 untouched.
+#
+# Why: the AX86U has CPU headroom to NAT at gigabit; the CRS106 does not.
+# This POC moves the router role from the CRS106 to the AX86U while leaving
+# br0 mostly intact, so the admin session on the default LAN stays up.
+#
+# Idempotent: re-running is safe; each step checks before mutating.
+#
+# Note: iptables rules are inlined here for POC simplicity. In production they
+# belong in /jffs/scripts/firewall-start so they survive firewall restarts
+# triggered by nvram or WAN events.
+
+TRUNK=eth5
+WAN=eth0
+
+VLAN_A_ID=10
+VLAN_A_BR=br10
+VLAN_A_NET=192.168.10
+
+VLAN_B_ID=50
+VLAN_B_BR=br50
+VLAN_B_NET=192.168.50
+
+# Untagged access ports — give one LAN port direct membership in each VLAN.
+VLAN_A_ACCESS=eth3   # LAN 2 → VLAN 10
+VLAN_B_ACCESS=eth4   # LAN 1 → VLAN 50
+
+log() { logger -t poc-vlan "$1"; echo "$1"; }
+
+ensure_vlan_iface() {
+    id=$1
+    iface="${TRUNK}.${id}"
+    if ! ip link show "$iface" >/dev/null 2>&1; then
+        ip link add link "$TRUNK" name "$iface" type vlan id "$id" || return 1
+        log "created VLAN interface $iface"
+    fi
+    ip link set "$iface" up
+}
+
+ensure_bridge_member() {
+    br=$1
+    member=$2
+    if ! brctl show "$br" 2>/dev/null | awk 'NR>1 {print $NF}' | grep -qx "$member"; then
+        brctl addif "$br" "$member"
+        log "added $member to $br"
+    fi
+}
+
+ensure_bridge() {
+    br=$1
+    member=$2
+    ip=$3
+    if ! ip link show "$br" >/dev/null 2>&1; then
+        brctl addbr "$br"
+        log "created bridge $br"
+    fi
+    ensure_bridge_member "$br" "$member"
+    ip link set "$br" up
+    if ! ip -o addr show "$br" | grep -q "inet ${ip}/"; then
+        ip addr add "${ip}/24" dev "$br"
+        log "assigned ${ip}/24 to $br"
+    fi
+}
+
+iptables_ensure() {
+    table=$1
+    shift
+    if ! iptables -t "$table" -C "$@" 2>/dev/null; then
+        iptables -t "$table" -I "$@"
+        log "iptables -t $table -I $*"
+    fi
+}
+
+detach_from_br0() {
+    iface=$1
+    if brctl show br0 2>/dev/null | awk 'NR>1 {print $NF}' | grep -qx "$iface"; then
+        brctl delif br0 "$iface"
+        log "removed $iface from br0"
+    fi
+    ip link set "$iface" up
+}
+
+# --- detach trunk + access ports from br0 ---
+detach_from_br0 "$TRUNK"
+detach_from_br0 "$VLAN_A_ACCESS"
+detach_from_br0 "$VLAN_B_ACCESS"
+
+# --- tagged sub-interfaces on the trunk ---
+ensure_vlan_iface "$VLAN_A_ID"
+ensure_vlan_iface "$VLAN_B_ID"
+
+# --- bridges, each with its tagged trunk member + router IP ---
+ensure_bridge "$VLAN_A_BR" "${TRUNK}.${VLAN_A_ID}" "${VLAN_A_NET}.1"
+ensure_bridge "$VLAN_B_BR" "${TRUNK}.${VLAN_B_ID}" "${VLAN_B_NET}.1"
+
+# --- untagged access ports added to each VLAN bridge ---
+ensure_bridge_member "$VLAN_A_BR" "$VLAN_A_ACCESS"
+ensure_bridge_member "$VLAN_B_BR" "$VLAN_B_ACCESS"
+
+# --- dnsmasq: a DHCP scope per VLAN bridge ---
+DNSMASQ_ADD=/jffs/configs/dnsmasq.conf.add
+mkdir -p /jffs/configs
+NEW=$(cat <<EOF
+# --- POC VLAN trunk (managed by services-start) ---
+interface=${VLAN_A_BR}
+dhcp-range=${VLAN_A_BR},${VLAN_A_NET}.100,${VLAN_A_NET}.200,255.255.255.0,24h
+dhcp-option=${VLAN_A_BR},3,${VLAN_A_NET}.1
+dhcp-option=${VLAN_A_BR},6,${VLAN_A_NET}.1
+
+interface=${VLAN_B_BR}
+dhcp-range=${VLAN_B_BR},${VLAN_B_NET}.100,${VLAN_B_NET}.200,255.255.255.0,24h
+dhcp-option=${VLAN_B_BR},3,${VLAN_B_NET}.1
+dhcp-option=${VLAN_B_BR},6,${VLAN_B_NET}.1
+EOF
+)
+if [ "$(cat "$DNSMASQ_ADD" 2>/dev/null)" != "$NEW" ]; then
+    echo "$NEW" > "$DNSMASQ_ADD"
+    log "updated $DNSMASQ_ADD"
+    service restart_dnsmasq >/dev/null
+fi
+
+# --- iptables: INPUT - allow DHCP/DNS/ICMP from each VLAN, reject the rest ---
+# Insert REJECT first so it sinks below the ACCEPTs (each later -I pushes it down).
+for br in "$VLAN_A_BR" "$VLAN_B_BR"; do
+    iptables_ensure filter INPUT -i "$br" -j REJECT
+    iptables_ensure filter INPUT -i "$br" -p icmp -j ACCEPT
+    iptables_ensure filter INPUT -i "$br" -p tcp --dport 53 -j ACCEPT
+    iptables_ensure filter INPUT -i "$br" -p udp --dport 53 -j ACCEPT
+    iptables_ensure filter INPUT -i "$br" -p udp --dport 67 -j ACCEPT
+done
+
+# --- iptables: FORWARD - inter-VLAN symmetric deny + WAN access ---
+iptables_ensure filter FORWARD -i "$VLAN_A_BR" -o "$VLAN_B_BR" -j REJECT
+iptables_ensure filter FORWARD -i "$VLAN_B_BR" -o "$VLAN_A_BR" -j REJECT
+iptables_ensure filter FORWARD -i "$VLAN_A_BR" -o "$WAN" -j ACCEPT
+iptables_ensure filter FORWARD -i "$VLAN_B_BR" -o "$WAN" -j ACCEPT
+iptables_ensure filter FORWARD -i "$WAN" -o "$VLAN_A_BR" -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables_ensure filter FORWARD -i "$WAN" -o "$VLAN_B_BR" -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# --- NAT both VLAN subnets out the WAN ---
+iptables_ensure nat POSTROUTING -o "$WAN" -s "${VLAN_A_NET}.0/24" -j MASQUERADE
+iptables_ensure nat POSTROUTING -o "$WAN" -s "${VLAN_B_NET}.0/24" -j MASQUERADE
+
+log "POC VLAN trunk setup complete on $TRUNK (VLANs $VLAN_A_ID + $VLAN_B_ID)"

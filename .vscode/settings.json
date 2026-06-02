@@ -7,6 +7,7 @@
   "cSpell.words": [
     "routeros", "mikrotik"
   ],
+  "git.branchProtection": [],
   "files.associations": {
     "*.rsc": "rosScript"
   }
